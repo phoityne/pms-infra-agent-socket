@@ -374,7 +374,7 @@ genSocketWriteByteTask cmdData = do
   handleTMVar <- view handleAppData <$> ask
   argsDat     <- liftEither $ eitherDecode argsBS
   let hex = argsDat^.dataSocketWriteByteToolParams
-  bs          <- liftEither $ hexToBytes hex
+  bs          <- liftEither $ DM.hexToBytes hex
   return $ socketWriteByteTask cmdData resQ handleTMVar bs
 
 -- |

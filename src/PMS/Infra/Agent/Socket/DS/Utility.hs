@@ -12,10 +12,6 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import qualified Control.Concurrent.STM as STM
 import Network.Socket
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base16 as B16
-import qualified Data.ByteString.Char8 as C8
-import Data.Char (toUpper)
 
 import qualified PMS.Domain.Model.DM.Type as DM
 import qualified PMS.Domain.Model.DS.Utility as DM
@@ -58,15 +54,6 @@ errorToolsCallResponse jsonRpc errStr = do
   liftIOE $ STM.atomically $ STM.writeTQueue resQ res
 
 ---------------------------------------------------------------------------------
--- | Decode an uppercase/lowercase hex string to a ByteString.
--- Input is uppercased before decoding to tolerate mixed case (e.g. "000a1BFF").
--- Returns Left with an error message if the input is not valid hex.
-hexToBytes :: String -> Either String BS.ByteString
-hexToBytes hex =
-  case B16.decode (C8.pack (map toUpper hex)) of
-    Right bs  -> Right bs
-    Left  err -> Left $ "hexToBytes: invalid hex string: " ++ err
-
 -- | Convert a TCP host/port to a Handle.
 -- The socket must not be used directly after socketToHandle.
 createSocketHandle :: HostName -> ServiceName -> IO Handle

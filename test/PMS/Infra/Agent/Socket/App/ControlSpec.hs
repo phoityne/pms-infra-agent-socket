@@ -20,6 +20,7 @@ import System.Log.FastLogger
 import qualified System.Log.FastLogger as FastLogger
 
 import qualified PMS.Domain.Model.DM.Type as DM
+import qualified PMS.Domain.Model.DS.Utility as DS
 import qualified PMS.Infra.Agent.Socket.App.Control as SUT
 import qualified PMS.Infra.Agent.Socket.DM.Type as SUT
 import qualified PMS.Infra.Agent.Socket.DS.Core as Core
@@ -250,7 +251,7 @@ run = do
                        { DM._jsonrpcAgentSocketWriteByteCommandData   = mkJsonRpc "agent-socket-write-byte"
                        , DM._argumentsAgentSocketWriteByteCommandData = DM.RawJsonByteString ""
                        }
-        Right bs <- return $ Util.hexToBytes hex
+        Right bs <- return $ DS.hexToBytes hex
         withConnectedPair $ \clientHdl serverSock -> do
           _ <- STM.atomically $ STM.swapTMVar (appDat^.SUT.handleAppData) (Just clientHdl)
           Core.socketWriteByteTask cmdDat
@@ -273,7 +274,7 @@ run = do
                        , DM._argumentsAgentSocketWriteByteCommandData = DM.RawJsonByteString ""
                        }
         mapM_ (\hex -> do
-          Right bs <- return $ Util.hexToBytes hex
+          Right bs <- return $ DS.hexToBytes hex
           appDat' <- SUT.defaultAppData
           withConnectedPair $ \clientHdl serverSock -> do
             _ <- STM.atomically $ STM.swapTMVar (appDat'^.SUT.handleAppData) (Just clientHdl)

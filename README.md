@@ -65,6 +65,134 @@ Use this for binary protocols or when precise byte-level control is required.
 
 ## 💡 Usage Notes
 
+### AI-to-AI communication
+
+Any two AI agents that each have a `pty-mcp-server` instance can communicate with each other directly over TCP — no shared infrastructure, message broker, or custom integration required.
+
+One agent uses the `agent-server-*` tools to act as a TCP server; the other uses the `agent-socket-*` tools (this library) to act as a TCP client. The agents exchange messages using a lightweight text protocol, and each agent interprets and responds to the other's messages autonomously.
+
+```
+┌─────────────────────────────┐         ┌─────────────────────────────┐
+│        AI Agent A           │         │        AI Agent B           │
+│  (e.g. Claude on Machine A) │         │  (e.g. GPT on Machine B)    │
+│                             │         │                             │
+│  pty-mcp-server             │  TCP    │  pty-mcp-server             │
+│  agent-server-listen :19999 │◄───────►│  agent-socket-open          │
+│  agent-server-write         │         │  agent-socket-read          │
+│  agent-server-events        │         │  agent-socket-write         │
+└─────────────────────────────┘         └─────────────────────────────┘
+         Server role                              Client role
+```
+
+#### What this enables
+
+- **Collaborative task solving** — Agent A breaks down a problem and delegates subtasks to Agent B, collecting results over the socket.
+- **Cross-model review** — One model generates code or text; another model on a different machine reviews it and sends back comments.
+- **Heterogeneous agent pipelines** — Chain agents of different models or specialisations (Claude, GPT, Gemini, …) into a processing pipeline across machines.
+- **Autonomous negotiation** — Agents can exchange proposals, counter-proposals, and decisions without human involvement in each round-trip.
+- **Distributed tool use** — Agent B may have access to tools (databases, sensors, local files) that Agent A does not. Agent A requests operations from Agent B over the socket.
+
+#### Communication protocol
+
+The `pty-mcp-server` ecosystem ships a lightweight handshake and messaging protocol for AI-to-AI sessions. Prompt skills (`skill_agent_server.md` / `skill_agent_client.md`) are provided so each agent knows exactly how to play its role.
+
+**Handshake sequence:**
+```
+Server → Client : HELLO? name?\r\n
+Server ← Client : NAME: <name>\r\n
+Server → Client : RULES: MSG:<content>\r\n | REPLY:<content>\r\n | BYE\r\n | HEX:<hex>\r\n
+Server ← Client : ACK\r\n
+```
+
+**Conversation:**
+```
+Server → Client : MSG: <content>\r\n
+Server ← Client : REPLY: <content>\r\n
+```
+
+**Graceful shutdown (server-initiated):**
+```
+Server → Client : BYE\r\n
+Server ← Client : ACK\r\n    ← server waits for this before closing
+Server           : agent-server-close
+```
+
+#### Full session example
+
+The following shows a complete exchange where Agent A (server role) delegates a task to Agent B (client role).
+
+**Agent A — server side**
+```
+agent-server-listen host=172.16.0.43 port=19999
+  → "listening."
+
+--- Agent B connects ---
+
+agent-server-events
+  → [{ "tag": "ClientConnected" }]
+
+agent-server-write-byte  "48454C4C4F3F206E616D653F0D0A"   ("HELLO? name?\r\n")
+
+agent-server-events  (poll until BytesReceived)
+  → bytes: "4E414D453A20416765742D420D0A"   ("NAME: Agent-B\r\n")
+
+agent-server-write-byte  "<hex of RULES: MSG:... | REPLY:... | BYE\r\n>"
+
+agent-server-events  (poll for ACK)
+  → bytes: "41434B0D0A"   ("ACK\r\n")
+
+--- handshake complete ---
+
+agent-server-write-byte  "<hex of MSG: Please summarise this text: ...\r\n>"
+
+agent-server-events  (poll for REPLY)
+  → bytes: "<hex of REPLY: Here is the summary: ...\r\n>"
+
+agent-server-write-byte  "<hex of BYE\r\n>"
+
+agent-server-events  (poll for ACK)
+  → bytes: "41434B0D0A"   ("ACK\r\n")
+
+agent-server-close
+```
+
+**Agent B — client side**
+```
+agent-socket-open host=172.16.0.43 port=19999
+  → socket connected to 172.16.0.43:19999
+
+agent-socket-read length=256
+  → "HELLO? name?\r\n"
+
+agent-socket-write-byte  "<hex of NAME: Agent-B\r\n>"
+
+agent-socket-read length=256
+  → "RULES: MSG:<content>\r\n | REPLY:<content>\r\n | BYE\r\n | HEX:<hex>\r\n"
+
+agent-socket-write-byte  "<hex of ACK\r\n>"
+
+--- handshake complete ---
+
+agent-socket-read length=1024
+  → "MSG: Please summarise this text: ...\r\n"
+
+--- Agent B processes the request autonomously ---
+
+agent-socket-write-byte  "<hex of REPLY: Here is the summary: ...\r\n>"
+
+agent-socket-read length=256
+  → "BYE\r\n"
+
+agent-socket-write-byte  "<hex of ACK\r\n>"
+
+agent-socket-close
+```
+
+> 💡 Always use `agent-socket-write-byte` (not `agent-socket-write`) to ensure `\r\n` is sent as correct CRLF bytes.  
+> Generate hex strings with: `python3 -c "print('your message\r\n'.encode().hex())"`
+
+---
+
 ### IAC / Telnet negotiation
 Telnet IAC processing is the **responsibility of the agent**, not the library.  
 Use `agent-socket-read-byte` and `agent-socket-write-byte` to handle IAC sequences at the byte level.
@@ -78,6 +206,39 @@ Example negotiation flow:
 ← "localhost login: "         (Login prompt — read as UTF-8 string)
 → "phoityne\r\n"              (Username — send as bytes: 70686F6974796E650D0A)
 ← "Password: "                (Password prompt)
+```
+
+Full login session example (confirmed with a real Linux Telnet server):
+```
+agent-socket-open host=172.16.0.171 port=23
+  → socket connected to 172.16.0.171:23
+
+← FFFD18FFFD20FFFD23FFFD27
+    (IAC DO TERMINAL-TYPE / DO TERMINAL-SPEED / DO X-DISPLAY / DO NEW-ENVIRON)
+→ FFFC18FFFC20FFFC23FFFC27
+    (IAC WONT x4)
+
+← FFFB03FFFD01FFFD1FFFFB05FFFD21
+    (IAC WILL SGA / DO ECHO / DO NAWS / WILL STATUS / DO REMOTE-FLOW-CONTROL)
+→ FFFD03FFFB01FFFC1FFFFD05FFFC21
+    (IAC DO SGA / WILL ECHO / WONT NAWS / DO STATUS / WONT REMOTE-FLOW-CONTROL)
+
+← FFFE01FFFB01 + "Kernel 6.12.0-...\r\nlocalhost login: "
+→ 61692D6167656E740D0A   ("ai-agent\r\n"  — username as bytes)
+
+← "ai-agent\r\nPassword: "
+→ 61692D6167656E740D0A   ("ai-agent\r\n"  — password as bytes)
+
+← "Last login: ...\r\n[ai-agent@localhost ~]$ "
+
+→ 686F73746E616D650D0A   ("hostname\r\n")
+← "hostname\r\nlocalhost.localdomain\r\n[ai-agent@localhost ~]$ "
+
+→ 657869740D0A   ("exit\r\n")
+← "exit\r\nlogout\r\n"
+
+agent-socket-close
+  → socket is closed.
 ```
 
 ### Unix Domain Socket on Windows
